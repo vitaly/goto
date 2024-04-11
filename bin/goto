@@ -1,0 +1,257 @@
+#!/usr/bin/env bash
+set -eEu
+
+# declare associative array of option => repository root
+declare -A project_root
+
+# default project_root
+project_root["-"]="$HOME/dev/src"
+
+# say [*MESSAGE]
+say() {
+  echo "$*" >&2
+}
+
+# die [*MESSAGE]
+die() {
+  say "ERROR: $*"
+  echo .
+  exit 0
+}
+
+
+# ------------------------------------------------------------------------------
+# usage [*ERROR]
+# ------------------------------------------------------------------------------
+usage() {
+  # compose the list of root options string as "-r ROOT | -k1 | -k2 | .." where k1 and k2 are keys from project_root"
+  local roots="-r DIR"
+  for key in "${!project_root[@]}"; do
+    roots+=" | -$key"
+  done
+
+  cat <<END >&2
+
+    g -h              help
+    g [FILTER]        interactively search and CD into a directory from ~/.warprc
+
+    g [$roots] URL                clone a git repository from URL and CD into it.
+    g [$roots] [-u] [FILTER]      interactively search and CD a repository
+
+        -u            update project list in the projects_root
+
+    ROOT for repositories:
+
+END
+  # print explanations for keys in project_root
+  for key in "${!project_root[@]}"; do
+    local default=""
+    [[ "-" = "$key" ]] && default=" (default when using URL)"
+
+    say "        -$key            ${project_root[$key]}$default"
+  done
+  say ''
+  say "        -r DIR        DIR"
+
+  # if an argument is passed print it as error
+  [[ -n ${1:-} ]] && {
+    say
+    die "$*"
+  }
+
+  echo .
+  exit 0
+}
+
+
+# read_config
+# OPTIONAL config file is ~/.gotorc
+# each line is OPTION:ROOT
+read_config() {
+  local rcfile=~/.gotorc
+  [[ -e $rcfile ]] || return
+
+  project_root=()
+
+  local n=0 option root
+  while IFS=: read -r option root; do
+    n=$((n++))
+    # check that options is a single character, and root is a directory.
+    [[ 1 -eq ${#option} ]] || die "invalid option in $rcfile:$n $option:$root"
+    # options 'h' and 'u' are reserved
+    case "$option" in
+      h|u|r) die "reserved option '-$option' in $rcfile:$n $option:$root" ;;
+    esac
+
+    root="${root/#\~/$HOME}"
+    [[ -d $root ]] ||       die "invalid root '$root' in $rcfile:$n: '$option:$root'"
+
+    project_root[$option]=$root
+  done <$rcfile
+}
+
+
+# ------------------------------------------------------------------------------
+#  update ROOT
+#  update projects list in the projects ROOT
+# ------------------------------------------------------------------------------
+update() {
+  say "updating project list in $1"
+  (
+    cd "$1"
+    find -L . -maxdepth 5  -type d -name .git -print0 | xargs -0 -n1 dirname | cut -d/ -f2- | grep -v /_/
+  ) > "$1/.list"
+
+  say "project list updated in $1"
+}
+
+# ------------------------------------------------------------------------------
+# choose and cd into war directory
+# ------------------------------------------------------------------------------
+cd_warp() {
+  local dir
+  dir=$(cut -d: -f1 < ~/.warprc | fzf -1 -0 +i -q "$*")
+
+  if [ -n "$dir" ]; then
+    say "Changing to $dir"
+    grep "^$dir:" ~/.warprc | head -1 | cut -d: -f2
+  else
+    die "no match"
+  fi
+}
+
+# ------------------------------------------------------------------------------
+# cd_project ROOT [FILTER]
+# choose and cd into a project
+# this uses cached projects list in root/.list
+# ------------------------------------------------------------------------------
+cd_project() {
+  set -x
+  local root="$1" query="${2:-}"
+
+  [[ -e "$root/.list" ]] || update "$root"
+  say "choose project in $root"
+
+  local d
+  d=$(fzf -0 -1 -q "$query" < "$root/.list")
+  set +x
+
+  [ -n "$d"  ] || die "no match"
+
+  local d="$root/$d"
+
+  [ -d "$d"  ] || die "invalid directory '$root/$d'"
+
+  # we first switch to home directory in case current dir has local overrides for XDG_* variables
+  # in which case direnv might try to look for envrc permissions in the wrong place
+  cd; cd "$d"
+  pwd -P
+}
+
+
+# return the path part of a URL
+_url_path() {
+  echo "$1" | sed -E \
+    -e "s,^((https?|ssh)://)?(([0-9a-zA-Z_.-]+:)?[0-9a-zA-Z_.-]+@)?,," \
+    -e 's,:[0-9]*/?,/,' \
+    -e 's,\.git$,,' \
+    -e 's,^/,,'
+}
+
+# ------------------------------------------------------------------------------
+# cd_repo ROOT REPO [*OPTIONS]
+# clone and cd into a directory
+# ------------------------------------------------------------------------------
+cd_repo() {
+  local cwd; cwd=$(pwd) # save the current directory
+
+  local root="$1" repo="$2"
+  shift 2
+
+
+  local dir
+  dir="$root/$(_url_path "$repo")"
+
+  say "cwd=$cwd root=$root"
+  say "repo=$repo dir: $dir opts=$*"
+
+  # if directory doesn't exist, clone the repo
+  if [[ -d "$dir" && -d "$dir/.git" ]]; then
+    cd "$dir"
+
+    # TODO: check if same origin/branch
+  else
+    if ! git clone "$@" -- "$repo" "$dir"; then
+      die "GIT CLONE FAILED: git clone $* -- '$repo' '$dir'"
+    fi
+
+    update "$root"
+
+    cd "$dir"
+  fi
+
+  pwd -P
+}
+
+
+main() {
+  read_config
+
+  if [ '-h' = "${1:-}" ]; then
+    usage
+  fi
+
+  local src=warp root=${project_root[-]}
+
+  [[ -d $root ]] || die "invalid default root '$root'"
+
+  if [ '-r' = "${1:-}" ]; then
+    [[ ${2:-} && -d $2 ]] || usage "-r DIRECTORY expected"
+    root=$2
+    src=projects
+    shift 2
+  fi
+
+  # if $1 is a single character option
+  case ${1:-} in
+    -r)
+      [[ ${2:-} && -d $2 ]] || usage "-r DIRECTORY expected"
+      root=$2
+      src=projects
+      shift 2
+      ;;
+
+    -?)
+      if [[ ${project_root[${1:1}]+x} ]]; then
+        root=${project_root[${1:1}]}
+        src=projects
+        shift
+      fi
+      ;;
+  esac
+
+  if [ '-u' = "${1:-}" ]; then
+    update "$root"
+    src=projects
+    shift
+  fi
+
+
+  case ${1:-} in
+    http://*|https://*|*:*)
+      cd_repo "$root" "$@"
+      ;;
+
+    *)
+      [[ $# -le 1 ]] || usage "too many arguments"
+      # say "src=$src root=$root"
+      case $src in
+        warp) cd_warp "$@";;
+        projects) cd_project "$root" "$@" ;;
+      esac
+      ;;
+  esac
+
+}
+
+main "$@"
