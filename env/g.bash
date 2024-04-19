@@ -1,6 +1,7 @@
+export GOTOBIN=${GOTOBIN:-goto}
 function g() {
   local dir
-  dir=$(goto "$@")
+  dir=$($GOTOBIN "$@")
   if [[ "$dir" != "." ]]; then
     # we first switch to home directory in case current dir has local overrides for XDG_* variables
     # in which case direnv might try to look for envrc permissions in the wrong place
