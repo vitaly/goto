@@ -1,12 +1,17 @@
-# Source this from bash
-# we first switch to home directory in case current dir has local overrides for XDG_* variables
-# in which case direnv might try to look for envrc permissions in the wrong place
 function g() {
   local dir
   dir=$(goto "$@")
   if [[ "$dir" != "." ]]; then
-    cd
+    # we first switch to home directory in case current dir has local overrides for XDG_* variables
+    # in which case direnv might try to look for envrc permissions in the wrong place
+    if ! cd; then
+      echo "cd failed" >&2
+      return
+    fi
     dir="${dir/#\~/$HOME}"
-    cd "$dir"
+    if ! cd "$dir"; then
+      echo "cd '$dir' failed" >&2
+      return
+    fi
   fi
 }
