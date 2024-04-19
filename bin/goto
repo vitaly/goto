@@ -4,8 +4,12 @@ set -eEu
 # declare associative array of option => repository root
 declare -A project_root
 
+export GOTO_DEFAULT_PROJECT_ROOT=${GOTO_DEFAULT_PROJECT_ROOT:-$HOME/dev/src}
+export GOTO_RCFILE=${GOTO_RCFILE:-~/.gotorc}
+export GOTO_JUMP_FILE=${GOTO_JUMP_FILE:-~/.warprc}
+
 # default project_root
-project_root["-"]="$HOME/dev/src"
+project_root["-"]="${GOTO_DEFAULT_PROJECT_ROOT}"
 
 # say [*MESSAGE]
 say() {
@@ -68,7 +72,7 @@ END
 # OPTIONAL config file is ~/.gotorc
 # each line is OPTION:ROOT
 read_config() {
-  local rcfile=~/.gotorc
+  local rcfile="${GOTO_RCFILE}"
   [[ -e $rcfile ]] || return
 
   project_root=()
@@ -110,11 +114,11 @@ update() {
 # ------------------------------------------------------------------------------
 cd_warp() {
   local dir
-  dir=$(cut -d: -f1 < ~/.warprc | fzf -1 -0 +i -q "$*")
+  dir=$(cut -d: -f1 < "${GOTO_JUMP_FILE}" | fzf -1 -0 +i -q "$*")
 
   if [ -n "$dir" ]; then
     say "Changing to $dir"
-    grep "^$dir:" ~/.warprc | head -1 | cut -d: -f2
+    grep "^$dir:" "${GOTO_JUMP_FILE}" | head -1 | cut -d: -f2
   else
     die "no match"
   fi
