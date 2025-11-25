@@ -36,7 +36,7 @@ Here are some of the common commands you can use with Goto:
 You can define custom root directories for your repositories.
 
 By default, the root is set to `$HOME/dev/src`. To add or modify root
-directories, edit the rc file (bu default `$HOME/.gotorc`)
+directories, edit the rc file (by default `$HOME/.gotorc`)
 
 The format is as follows:
 
