@@ -73,7 +73,15 @@ END
 # each line is OPTION:ROOT
 read_config() {
   local rcfile="${GOTO_RCFILE}"
-  [[ -e $rcfile ]] || return
+  if [[ ! -e $rcfile ]]; then
+    echo >&2 "Configuration file $rcfile NOT FOUND"
+    echo >&2 "Press ENTER to create default file, or Ctrl-C to exit".
+    read
+    echo >&2 "Creating"
+    cat > $rcfile <<END
+-:~/dev/src
+END
+  fi
 
   project_root=()
 
