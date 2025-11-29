@@ -3,13 +3,9 @@ set -eEu
 
 # declare associative array of option => repository root
 declare -A project_root
+declare jump_file=
 
-export GOTO_DEFAULT_PROJECT_ROOT=${GOTO_DEFAULT_PROJECT_ROOT:-$HOME/dev/src}
 export GOTO_RCFILE=${GOTO_RCFILE:-~/.gotorc}
-export GOTO_JUMP_FILE=${GOTO_JUMP_FILE:-~/.warprc}
-
-# default project_root
-project_root["-"]="${GOTO_DEFAULT_PROJECT_ROOT}"
 
 # say [*MESSAGE]
 say() {
@@ -58,7 +54,7 @@ END
   say "        -r DIR        DIR"
 
   # if an argument is passed print it as error
-  [[ -n ${1:-} ]] && {
+  [[ -n "${1:-}" ]] && {
     say
     die "$*"
   }
@@ -69,37 +65,55 @@ END
 
 
 # read_config
-# OPTIONAL config file is ~/.gotorc
+# config file is ~/.gotorc
 # each line is OPTION:ROOT
 read_config() {
   local rcfile="${GOTO_RCFILE}"
-  if [[ ! -e $rcfile ]]; then
-    echo >&2 "Configuration file $rcfile NOT FOUND"
-    echo >&2 "Press ENTER to create default file, or Ctrl-C to exit".
+  if [[ ! -e "$rcfile" ]]; then
+    say "Configuration file $rcfile NOT FOUND"
+    say "Press ENTER to create default file, or Ctrl-C to exit".
     read
-    echo >&2 "Creating"
-    cat > $rcfile <<END
+    say "Creating '$rcfile' ..."
+    cat > "$rcfile" <<END
+:~/.warprc
 -:~/dev/src
 END
   fi
 
-  project_root=()
-
   local n=0 option root
   while IFS=: read -r option root; do
-    n=$((n++))
-    # check that options is a single character, and root is a directory.
-    [[ 1 -eq ${#option} ]] || die "invalid option in $rcfile:$n $option:$root"
-    # options 'h' and 'u' are reserved
-    case "$option" in
-      h|u|r) die "reserved option '-$option' in $rcfile:$n $option:$root" ;;
+    n=$((n+1))
+    # check that options is a single character and root is a directory.
+    # or empty, and root is a file
+    root="${root/#\~/$HOME}"
+
+    case "${option}" in
+
+      h|u|r)
+        # options 'h', 'r', and 'u' are reserved
+        die "reserved option '-$option' in $rcfile:$n $option:$root"
+        ;;
+
+      "")
+        [ -f "$root" ] || die "invalid jump file, not a file: '$root' in $rcfile:$n '$option':'$root'"
+        [ -z "$jump_file" ] || die "duplicate jump_file '$root'. already set to '$jump_file'"
+        jump_file="$root"
+        ;;
+
+      ?)
+        [ -d "$root" ] || die "invalid root, not a directory: '$root' in $rcfile:$n '$option':'$root'"
+        project_root[$option]=$root
+        ;;
+
+      *)
+        die "invalid option length in $rcfile:$n '$option':'$root'"
+        ;;
     esac
 
-    root="${root/#\~/$HOME}"
-    [[ -d $root ]] ||       die "invalid root '$root' in $rcfile:$n: '$option:$root'"
-
-    project_root[$option]=$root
   done <$rcfile
+
+  [[ -n "${jump_file}" ]] || die "no jump file ('') defined in $rcfile"
+  [[ -n "${project_root['-']:-}" ]] || die "no default root ('-') defined in $rcfile"
 }
 
 
@@ -121,12 +135,22 @@ update() {
 # choose and cd into war directory
 # ------------------------------------------------------------------------------
 cd_warp() {
+  if [[ -z "$jump_file" ]]; then
+    cat >&2 <<END
+Jump file not defined.
+add a line in $GOTO_RCFILE of the following format:
+:JUMP_FILE_PATH
+
+END
+    exit 1
+  fi
+
   local dir
-  dir=$(cut -d: -f1 < "${GOTO_JUMP_FILE}" | fzf -1 -0 +i -q "$*")
+  dir=$(cut -d: -f1 < "${jump_file}" | fzf -1 -0 +i -q "$*")
 
   if [ -n "$dir" ]; then
     say "Changing to $dir"
-    grep "^$dir:" "${GOTO_JUMP_FILE}" | head -1 | cut -d: -f2
+    grep "^$dir:" "${jump_file}" | head -1 | cut -d: -f2 | tr -d '\n'
   else
     die "no match"
   fi
@@ -138,7 +162,6 @@ cd_warp() {
 # this uses cached projects list in root/.list
 # ------------------------------------------------------------------------------
 cd_project() {
-  set -x
   local root="$1" query="${2:-}"
 
   [[ -e "$root/.list" ]] || update "$root"
@@ -152,7 +175,7 @@ cd_project() {
 
   local d="$root/$d"
 
-  [ -d "$d"  ] || die "invalid directory '$root/$d'"
+  [ -d "$d"  ] || die "invalid directory '$root'"
 
   # we first switch to home directory in case current dir has local overrides for XDG_* variables
   # in which case direnv might try to look for envrc permissions in the wrong place
@@ -215,26 +238,19 @@ main() {
 
   local src=warp root=${project_root[-]}
 
-  [[ -d $root ]] || die "invalid default root '$root'"
-
-  if [ '-r' = "${1:-}" ]; then
-    [[ ${2:-} && -d $2 ]] || usage "-r DIRECTORY expected"
-    root=$2
-    src=projects
-    shift 2
-  fi
+  [[ -d "$root" ]] || die "invalid default root '$root'"
 
   # if $1 is a single character option
-  case ${1:-} in
+  case "${1:-}" in
     -r)
-      [[ ${2:-} && -d $2 ]] || usage "-r DIRECTORY expected"
+      [[ "${2:-}" && -d "$2" ]] || usage "-r DIRECTORY expected"
       root=$2
       src=projects
       shift 2
       ;;
 
     -?)
-      if [[ ${project_root[${1:1}]+x} ]]; then
+      if [[ "${project_root[${1:1}]+x}" ]]; then
         root=${project_root[${1:1}]}
         src=projects
         shift
@@ -249,7 +265,7 @@ main() {
   fi
 
 
-  case ${1:-} in
+  case "${1:-}" in
     http://*|https://*|*:*)
       cd_repo "$root" "$@"
       ;;
@@ -257,7 +273,7 @@ main() {
     *)
       [[ $# -le 1 ]] || usage "too many arguments"
       # say "src=$src root=$root"
-      case $src in
+      case "$src" in
         warp) cd_warp "$@";;
         projects) cd_project "$root" "$@" ;;
       esac
